@@ -4,11 +4,11 @@
 #include <stdint.h>
 #include <string.h>
 
-#define YKB_PROTOCOL_VERSION 1
+#define YKB_PROTOCOL_VERSION 1U
 
 #ifndef YKB_PROTOCOL_DATA_LENGTH
 // Length of data buffer per one transfer
-#define YKB_PROTOCOL_DATA_LENGTH 55
+#define YKB_PROTOCOL_DATA_LENGTH 57U
 #endif // YKB_PROTOCOL_DATA_LENGTH
 
 /* Errors */
@@ -90,9 +90,7 @@ typedef struct YKB_PACKED {
 
   uint8_t packet_size; // Amount of bytes in data array
 
-  uint16_t packet_count;  // Amount of packets coming in
   uint16_t packet_number; // Current packet index.
-  // 0 <= packet_number < packet_count
 
   uint16_t crc; // CRC of data
 
@@ -104,7 +102,7 @@ typedef struct YKB_PACKED {
 #pragma pack(pop) // Restore packing for MSVC
 #endif
 
-static inline uint16_t crc16(const uint8_t *data, size_t length) {
+static inline uint16_t ykb_crc16(const uint8_t *data, size_t length) {
 
   uint16_t crc = 0xFFFF;
 
@@ -130,7 +128,7 @@ static inline uint16_t crc16(const uint8_t *data, size_t length) {
 // Get the minimum protocol pack size.
 //
 // Pack size is always >= 1
-uint16_t ykb_protocol_get_pack_size(uint32_t data_length) {
+static inline uint16_t ykb_protocol_get_pack_size(uint32_t data_length) {
   return (data_length / YKB_PROTOCOL_DATA_LENGTH) + 1;
 }
 
@@ -140,21 +138,20 @@ uint16_t ykb_protocol_get_pack_size(uint32_t data_length) {
 // The caller is responsive for allocating memory for the result array.
 // Size of the allocation:
 // `ykb_protocol_get_pack_size(data_length) * sizeof(ykb_protocol_t)`
-int ykb_protocol_pack(ykb_protocol_t *result, uint8_t request,
-                      const uint8_t *data, uint32_t data_length) {
+static inline int ykb_protocol_pack(ykb_protocol_t *result, uint8_t request,
+                                    const uint8_t *data, uint32_t data_length) {
 
   if (!result || !IS_YKB_REQUEST(request)) {
     return YKB_PACK_ERR_BADARGS;
   }
 
-  if (IS_YKB_GET_REQUEST(request)) {
+  if (IS_YKB_GET_REQUEST(request) && (!data || data_length == 0)) {
     ykb_protocol_t p = {.data = {0},
                         .request_and_version = request | YKB_PROTOCOL_VERSION,
-                        .packet_count = 1,
                         .packet_number = 0,
                         .packet_size = 0,
                         .crc = 0};
-    p.crc = crc16(p.data, 0);
+    p.crc = ykb_crc16(p.data, 0);
     memcpy(result, &p, sizeof(ykb_protocol_t));
     return 0;
   }
@@ -165,7 +162,6 @@ int ykb_protocol_pack(ykb_protocol_t *result, uint8_t request,
     ykb_protocol_t p;
 
     p.request_and_version = request | YKB_PROTOCOL_VERSION;
-    p.packet_count = total_packets;
     p.packet_number = i;
 
     uint16_t offset = i * YKB_PROTOCOL_DATA_LENGTH;
@@ -185,7 +181,7 @@ int ykb_protocol_pack(ykb_protocol_t *result, uint8_t request,
       }
     }
 
-    p.crc = crc16(p.data, bytes_left);
+    p.crc = ykb_crc16(p.data, bytes_left);
 
     memcpy(result + (sizeof(ykb_protocol_t) * i), &p, sizeof(ykb_protocol_t));
   }
@@ -197,9 +193,9 @@ int ykb_protocol_pack(ykb_protocol_t *result, uint8_t request,
 //
 // `previous` should be NULL if first packet expected.
 //
-// Returns 0 on success or 1 if success and packet is last.
-int ykb_protocol_parse(const ykb_protocol_t *previous, ykb_protocol_t *next,
-                       const uint8_t *data) {
+// Returns 0 on success.
+static inline int ykb_protocol_parse(ykb_protocol_t *next,
+                                     const uint8_t *data) {
 
   if (!data) {
     return YKB_PARSE_ERR_DATA_NULL;
@@ -218,107 +214,17 @@ int ykb_protocol_parse(const ykb_protocol_t *previous, ykb_protocol_t *next,
     return YKB_PARSE_ERR_BAD_REQUEST;
   }
 
-  if (!previous && new_packet.packet_number != 0) {
-    return YKB_PARSE_ERR_PREVIOUS_EXPECTED;
-  }
-
-  if (new_packet.packet_count == 0) {
-    // Packet count should always be >= 1
-    return YKB_PARSE_ERR_PACKET_COUNT_INVALID;
-  }
-
-  if (previous) {
-    if (new_packet.packet_count != previous->packet_count) {
-      return YKB_PARSE_ERR_PACKET_COUNT_MISMATCH;
-    }
-    if (new_packet.packet_number != previous->packet_number + 1) {
-      return YKB_PARSE_ERR_PACKET_NUMBER_MISMATCH;
-    }
-  }
-
-  if (new_packet.packet_number >= new_packet.packet_count) {
-    return YKB_PARSE_ERR_PACKET_NUMBER_INVALID;
-  }
   if (new_packet.packet_size > YKB_PROTOCOL_DATA_LENGTH) {
     return YKB_PARSE_ERR_PACKET_SIZE_INVALID;
   }
 
-  uint16_t crc = crc16(new_packet.data, new_packet.packet_size);
+  uint16_t crc = ykb_crc16(new_packet.data, new_packet.packet_size);
   if (crc != new_packet.crc) {
     return YKB_PARSE_ERR_CRC_INVALID;
   }
 
   if (next) {
     *next = new_packet;
-  }
-
-  if (new_packet.packet_number == new_packet.packet_count - 1) {
-    // Last packet recevied
-    return 1;
-  }
-
-  return 0;
-}
-
-int ykb_protocol_parse_continuous(
-
-    // Function pointer for getting new data
-    int (*get_new_data)(uint8_t *out_buffer, size_t bytes_needed),
-
-    // Optional callback which is called each iteration
-    void (*iteration_callback)(uint16_t iteration, uint8_t *data,
-                               uint16_t data_length),
-
-    uint8_t *result,            // Result data buffer
-    uint32_t result_max_length, // Maximum data buffer length
-    uint32_t *out_total         // Optional result data buffer length
-) {
-
-  if (!get_new_data) {
-    return YKB_PARSE_CONT_ERR_BADARGS;
-  }
-
-  ykb_protocol_t previous;
-  ykb_protocol_t next;
-  int err;
-  uint16_t offset = 0;
-  uint8_t temp[sizeof(ykb_protocol_t)];
-
-  ykb_protocol_t *prev_ptr = NULL;
-
-  for (uint16_t i = 0;; i++) {
-    err = get_new_data(temp, sizeof(temp));
-    if (err < 0) {
-      return err;
-    }
-
-    err = ykb_protocol_parse(prev_ptr, &next, temp);
-    if (err < 0) {
-      return err;
-    }
-
-    if (result) {
-      if (offset + next.packet_size > result_max_length) {
-        return YKB_PARSE_CONT_ERR_OVERFLOW;
-      }
-      memcpy(result + offset, next.data, next.packet_size);
-    }
-    offset += next.packet_size;
-
-    previous = next;
-    prev_ptr = &previous;
-
-    if (iteration_callback) {
-      iteration_callback(i, next.data, next.packet_size);
-    }
-
-    if (err == 1) {
-      // Last packet
-      if (out_total) {
-        *out_total = offset;
-      }
-      break;
-    }
   }
 
   return 0;
