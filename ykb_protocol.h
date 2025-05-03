@@ -41,6 +41,7 @@
 #define YKB_REQUEST_SET_THRESHOLDS (7U << 4)
 
 #define YKB_REQUEST_FIRMWARE_UPDATE (8U << 4)
+#define YKB_REQUEST_BOOTLOADER_UPDATE (9U << 4)
 
 /* Request errors */
 
@@ -59,7 +60,8 @@
 #define IS_YKB_SET_REQUEST(ARG)                                                \
     ((ARG == YKB_REQUEST_SET_MAPPINGS) || (ARG == YKB_REQUEST_SET_SETTINGS) || \
      (ARG == YKB_REQUEST_SET_THRESHOLDS) ||                                    \
-     (ARG == YKB_REQUEST_FIRMWARE_UPDATE))
+     (ARG == YKB_REQUEST_FIRMWARE_UPDATE) ||                                   \
+     (ARG == YKB_REQUEST_BOOTLOADER_UPDATE))
 
 #define IS_YKB_REQUEST_ERROR(ARG)                                              \
     ((ARG == YKB_REQUEST_ERROR_PARSING) ||                                     \
@@ -80,7 +82,7 @@
 typedef struct YKB_PACKED {
 
     uint8_t request_and_version;
-    // [0-3] Protocol request (Ignored on host)
+    // [0-3] Protocol request
     // [4-7] Protocol version. Current version: 1
 
     uint8_t packet_size; // Amount of bytes in data array
